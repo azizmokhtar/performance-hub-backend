@@ -1,0 +1,22 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.py,cover
+# Virtual envs
+.venv/
+venv/
+# Django stuff
+*.log
+staticfiles/
+media/
+db.sqlite3
+# Env / secrets
+.env
+.env.*
+# IDE
+.vscode/
+.idea/
+.DS_Store
