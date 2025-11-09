@@ -76,16 +76,36 @@ class IsOwnerOrCoachOrAdmin(permissions.BasePermission):
         return False
 
 class IsSelfOrCoachOrAdmin(permissions.BasePermission):
-    """
-    Allows access for the user to view/edit their own profile, or for a coach/admin
-    to view/edit any user profile within their team.
-    """
     def has_object_permission(self, request, view, obj):
-        # Allow user to view/edit their own profile
+        # Always allow admins
+        if request.user.is_admin():
+            return True
+
+        # Allow self
         if obj == request.user:
             return True
 
-        # Allow coaches/admins to view/edit users in their team
-        if request.user.is_coach() or request.user.is_admin():
-            return obj.team == request.user.team
+        # Allow coaches for users in their team
+        if request.user.is_coach():
+            return getattr(obj, "team_id", None) == request.user.team_id
+
         return False
+
+
+
+from rest_framework import permissions
+
+class IsCoachOwnerMemberOrAdmin(permissions.BasePermission):
+    """
+    Allow COACH, ADMIN, the team's OWNER, or any user whose .team matches the team.
+    Expects `obj` to be a Team instance.
+    """
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_admin() or user.is_coach():
+            return True
+        if getattr(obj, "owner_id", None) == user.id:
+            return True
+        return getattr(user, "team_id", None) == obj.id

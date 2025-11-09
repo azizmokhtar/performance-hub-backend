@@ -17,6 +17,15 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, attrs):
+        # normalize email
+        email = attrs.get('email', '')
+        attrs['email'] = email.strip().lower()
+
+        # enforce CI uniqueness at serializer layer (nice UX)
+        from .models import CustomUser
+        if CustomUser.objects.filter(email__iexact=attrs['email']).exists():
+            raise serializers.ValidationError({"email": "A user with that email already exists."})
+
         if attrs['password'] != attrs['password2']:
             raise serializers.ValidationError({"password": "Password fields didn't match."})
         return attrs
@@ -65,6 +74,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 class UserTeamListSerializer(serializers.ModelSerializer):
+    team_name = serializers.CharField(source='team.name', read_only=True)
     class Meta:
         model = CustomUser
-        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'jersey_number', 'position', 'profile_picture')
+        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'jersey_number', 'position', 'profile_picture', 'team_name')
+
+class AdminUserUpdateSerializer(UserProfileSerializer):
+    class Meta(UserProfileSerializer.Meta):
+        read_only_fields = ('email', 'team_name')  # allow 'team' and 'role' to be writable for admins

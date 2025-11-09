@@ -12,6 +12,12 @@ class Team(models.Model):
         related_name='coached_teams',
         limit_choices_to={'role': 'COACH'} # Restrict to users with 'COACH' role
     )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='owned_teams'
+    )
     established_date = models.DateField(null=True, blank=True)
     location = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

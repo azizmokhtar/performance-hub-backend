@@ -1,7 +1,7 @@
 from django.db import models
 from django.conf import settings # To refer to AUTH_USER_MODEL
 from teams.models import Team # Assuming teams app is already defined
-
+import os
 class Document(models.Model):
     title = models.CharField(max_length=255)
     file = models.FileField(upload_to='documents/%Y/%m/%d/') # Organized by year/month/day

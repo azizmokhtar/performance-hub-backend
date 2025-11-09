@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Conversation, Message, Announcement
-from users.serializers import UserProfileSerializer # For participant details
+from users.serializers import UserProfileSerializer
 
 class MessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.CharField(source='sender.get_full_name', read_only=True)
@@ -9,7 +9,9 @@ class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
         fields = ('id', 'conversation', 'sender', 'sender_name', 'sender_email', 'content', 'timestamp')
-        read_only_fields = ('sender', 'timestamp')
+        # Make 'conversation' read-only because perform_create assigns it
+        read_only_fields = ('sender', 'timestamp', 'conversation')
+
 
 class ConversationSerializer(serializers.ModelSerializer):
     participants_details = UserProfileSerializer(source='participants', many=True, read_only=True)
@@ -17,8 +19,11 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Conversation
-        fields = ('id', 'name', 'is_group_chat', 'participants', 'participants_details', 'created_at', 'updated_at', 'last_message')
-        read_only_fields = ('created_at', 'updated_at', 'last_message', 'participants_details') # Participants can be added via separate endpoint
+        fields = (
+            'id', 'name', 'is_group_chat', 'participants',
+            'participants_details', 'created_at', 'updated_at', 'last_message'
+        )
+        read_only_fields = ('created_at', 'updated_at', 'last_message', 'participants_details')
 
     def get_last_message(self, obj):
         last_msg = obj.messages.order_by('-timestamp').first()
@@ -26,10 +31,33 @@ class ConversationSerializer(serializers.ModelSerializer):
             return MessageSerializer(last_msg).data
         return None
 
+    def validate(self, attrs):
+        """
+        Ensure all participants are from the same (non-null) team.
+        For DM, exactly 2 participants (will be finalized in the view’s perform_create).
+        """
+        participants = attrs.get('participants', [])
+        if not participants:
+            raise serializers.ValidationError({"participants": ["At least one participant is required."]})
+
+        # Include the request.user if not already present (mirror your perform_create).
+        req = self.context.get('request')
+        if req and req.user.is_authenticated and req.user not in participants:
+            participants = list(participants) + [req.user]
+
+        team_ids = {getattr(u, 'team_id', None) for u in participants}
+        # All must share the same team_id and it cannot be None
+        if len(team_ids) != 1 or None in team_ids:
+            raise serializers.ValidationError({"participants": ["All participants must belong to the same team."]})
+
+        # Optionally forbid participants==1 for group chats
+        # (we’ll allow draft 1→add later; you can tighten if needed)
+        return attrs
+
     def create(self, validated_data):
-        participants_data = validated_data.pop('participants')
+        participants = validated_data.pop('participants')
         conversation = Conversation.objects.create(**validated_data)
-        conversation.participants.set(participants_data)
+        conversation.participants.set(participants)
         return conversation
 
 class AnnouncementSerializer(serializers.ModelSerializer):

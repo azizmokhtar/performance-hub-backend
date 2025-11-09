@@ -1,6 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
-
+from django.db.models.functions import Lower
 from .managers import CustomUserManager   # <-- add this import
 
 class CustomUser(AbstractUser):
@@ -30,6 +30,13 @@ class CustomUser(AbstractUser):
     REQUIRED_FIELDS = ['first_name', 'last_name', 'role']
 
     objects = CustomUserManager()   
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower('email'),
+                name='uniq_customuser_email_ci',
+            )
+        ]
 
     def __str__(self):
         return self.email

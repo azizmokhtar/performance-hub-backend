@@ -52,7 +52,7 @@ class Announcement(models.Model):
         on_delete=models.SET_NULL, # Don't delete announcement if sender leaves
         null=True, blank=True,
         related_name='sent_announcements',
-        limit_choices_to={'role__in': ['COACH', 'ADMIN']}
+        limit_choices_to={'role__in': ['COACH', 'STAFF', 'ADMIN']}
     )
     team = models.ForeignKey(
         Team,
