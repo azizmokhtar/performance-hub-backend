@@ -22,14 +22,14 @@ class EventSerializer(serializers.ModelSerializer):
 
 class AttendanceSerializer(serializers.ModelSerializer):
     player_name = serializers.CharField(source='player.get_full_name', read_only=True)
-    player_position = serializers.CharField(source='player.position', read_only=True)
+    # player_position removed (was on CustomUser). Optionally compute later via membership in a custom list endpoint.
     event_title = serializers.CharField(source='event.title', read_only=True)
     reported_by_name = serializers.CharField(source='reported_by.get_full_name', read_only=True)
 
     class Meta:
         model = Attendance
         fields = (
-            'id', 'event', 'event_title', 'player', 'player_name', 'player_position',
+            'id', 'event', 'event_title', 'player', 'player_name',
             'status', 'notes', 'reported_by', 'reported_by_name', 'timestamp'
         )
         read_only_fields = ('timestamp', 'reported_by')

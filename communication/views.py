@@ -35,13 +35,24 @@ from .models import Conversation, Message, Announcement
 from .serializers import ConversationSerializer, MessageSerializer, AnnouncementSerializer
 from users.permissions import IsCoachOrAdmin, IsTeamMember
 
+
+# Helper: active team ids for a user
+#TODO : TURN THIS FUNCTION TO A HELPER FILE TO USE EVERYWHERE
+from teams.models import TeamMembership, Team
+
+def active_team_ids(user):
+    return list(
+        TeamMembership.objects.filter(user=user, active=True)
+        .values_list("team_id", flat=True)
+    )
+
 class ConversationViewSet(viewsets.ModelViewSet):
     queryset = Conversation.objects.all()
     serializer_class = ConversationSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Users can only see conversations they are part of
+        # Users see only conversations they participate in
         return self.queryset.filter(participants=self.request.user)
 
     def perform_create(self, serializer):
@@ -53,22 +64,28 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="start_dm")
     def start_dm(self, request):
-        """Start or fetch a 1:1 conversation with a teammate."""
+        """Start or fetch a 1:1 conversation with a teammate (must share an active team)."""
         me = request.user
         target_id = request.data.get("user_id")
         if not target_id:
             return Response({"detail": "Missing user_id."}, status=400)
 
         try:
-            target = me.team.members.get(id=target_id) if me.team_id else None
-        except Exception:
-            target = None
-        if not target:
-            return Response({"detail": "Target user must be in the same team."}, status=400)
+            from users.models import CustomUser
+            target = CustomUser.objects.get(pk=target_id)
+        except CustomUser.DoesNotExist:
+            return Response({"detail": "User not found."}, status=404)
+
         if target.id == me.id:
             return Response({"detail": "Cannot start a DM with yourself."}, status=400)
 
-        # Find existing DM: exactly 2 participants (me, target), not a group
+        my_teams = set(active_team_ids(me))
+        target_teams = set(active_team_ids(target))
+        common = my_teams & target_teams
+        if not common:
+            return Response({"detail": "Target user must share an active team with you."}, status=400)
+
+        # Find existing DM with exactly 2 participants
         qs = (
             Conversation.objects.filter(is_group_chat=False, participants=me)
             .filter(participants=target)
@@ -82,31 +99,42 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
         return Response(ConversationSerializer(conv).data, status=200)
 
+
     @action(detail=True, methods=["post"], url_path="add_participants")
     def add_participants(self, request, pk=None):
-        """Add teammates to an existing group conversation."""
+        """Add participants who share an active team with the requester."""
         conv = get_object_or_404(self.get_queryset(), pk=pk)
 
-        # Must be a group chat
         if not conv.is_group_chat:
             return Response({"detail": "Cannot add participants to a direct message."}, status=400)
 
-        # Only allow adding teammates
         ids = request.data.get("participant_ids", []) or []
         if not isinstance(ids, list) or not ids:
             return Response({"detail": "participant_ids must be a non-empty list."}, status=400)
 
         me = request.user
-        if not me.team_id:
-            return Response({"detail": "Only team members can add participants."}, status=403)
+        my_teams = set(active_team_ids(me))
+        if not my_teams:
+            return Response({"detail": "Only active team members can add participants."}, status=403)
 
-        valid_new = list(me.team.members.filter(id__in=ids).exclude(id__in=conv.participants.values_list("id", flat=True)))
+        from users.models import CustomUser
+        existing_ids = set(conv.participants.values_list("id", flat=True))
+        candidates = list(CustomUser.objects.filter(id__in=ids).exclude(id__in=existing_ids))
+        if not candidates:
+            return Response({"detail": "No valid users to add."}, status=400)
+
+        valid_new = []
+        for u in candidates:
+            if my_teams & set(active_team_ids(u)):
+                valid_new.append(u)
+
         if not valid_new:
-            return Response({"detail": "No valid teammates to add."}, status=400)
+            return Response({"detail": "No candidates share an active team with you."}, status=400)
 
         conv.participants.add(*valid_new)
         conv.save(update_fields=["updated_at"])
         return Response(ConversationSerializer(conv).data, status=200)
+
 
 class MessageListView(generics.ListCreateAPIView):
     serializer_class = MessageSerializer
@@ -135,9 +163,10 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Users can only see announcements for their own team
-        if self.request.user.team:
-            return self.queryset.filter(team=self.request.user.team).order_by('-timestamp')
+    # Users can see announcements for any team they actively belong to
+        team_ids = active_team_ids(self.request.user)
+        if team_ids:
+          return self.queryset.filter(team_id__in=team_ids).order_by("-timestamp")
         return self.queryset.none()
 
     def get_permissions(self):
@@ -147,12 +176,32 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         user = self.request.user
-        # Safety: permissions already required by get_permissions
-        if not getattr(user, "team_id", None):
-            self.permission_denied(self.request, message="Staff must belong to a team to post announcements.")
-        # Force sender & team; ignore any client-provided team
-        serializer.save(sender=user, team=user.team)
-
+        # If staff/coach: force the announcement team to one of their active teams unless admin
+        if user.is_admin():
+            # Admin may choose any team; require a valid team in payload
+            team = serializer.validated_data.get("team")
+            if not team:
+                self.permission_denied(self.request, message="Admin must specify a team.")
+            serializer.save(sender=user)
+            return
+    
+        teams = active_team_ids(user)
+        if not teams:
+            self.permission_denied(self.request, message="You must be an active team member to post.")
+    
+        payload_team = serializer.validated_data.get("team")
+        if payload_team:
+            if payload_team.id not in teams:
+                self.permission_denied(self.request, message="You are not a member of the specified team.")
+            serializer.save(sender=user)
+        else:
+            # If only one active team, use it; if many, ask client to specify
+            if len(teams) > 1:
+                self.permission_denied(self.request, message="You belong to multiple teams. Specify the team.")
+            from teams.models import Team
+            team = Team.objects.get(pk=teams[0])
+            serializer.save(sender=user, team=team)
+    
 
     # Custom action to mark an announcement as read
     def mark_as_read(self, request, pk=None):

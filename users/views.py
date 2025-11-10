@@ -109,6 +109,8 @@ class UserProfileMeView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+# users/views.py
+from teams.models import TeamMembership
 
 class UsersByTeamListView(generics.ListAPIView):
     serializer_class = UserTeamListSerializer
@@ -117,13 +119,15 @@ class UsersByTeamListView(generics.ListAPIView):
     def get_queryset(self):
         team_id = int(self.kwargs['team_id'])
 
-        # Admins can view any team
+        # Admins see all
         if self.request.user.is_admin():
-            return CustomUser.objects.filter(team_id=team_id)
+            return CustomUser.objects.filter(memberships__team_id=team_id).distinct()
 
-        # Coaches can only view their own team
-        if self.request.user.is_coach() and self.request.user.team_id == team_id:
-            return CustomUser.objects.filter(team_id=team_id)
+        # Coaches limited to their teams -> check membership
+        if self.request.user.is_coach() and TeamMembership.objects.filter(
+            team_id=team_id, user_id=self.request.user.id, role_on_team='COACH', active=True
+        ).exists():
+            return CustomUser.objects.filter(memberships__team_id=team_id).distinct()
 
         return CustomUser.objects.none()
 

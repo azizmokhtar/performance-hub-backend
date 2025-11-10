@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     # My apps (Order can matter for dependencies, but this is a good start)
     'users',
     'teams',
+    'profiles',
     'communication',
     'calendar_events',
 

@@ -33,26 +33,34 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         """
-        Ensure all participants are from the same (non-null) team.
-        For DM, exactly 2 participants (will be finalized in the view’s perform_create).
+        Ensure all participants share at least one common active team.
+        Also auto-include request.user if not present (DM/group creation).
         """
-        participants = attrs.get('participants', [])
+        participants = list(attrs.get('participants', []))
         if not participants:
             raise serializers.ValidationError({"participants": ["At least one participant is required."]})
-
-        # Include the request.user if not already present (mirror your perform_create).
+    
         req = self.context.get('request')
         if req and req.user.is_authenticated and req.user not in participants:
-            participants = list(participants) + [req.user]
-
-        team_ids = {getattr(u, 'team_id', None) for u in participants}
-        # All must share the same team_id and it cannot be None
-        if len(team_ids) != 1 or None in team_ids:
-            raise serializers.ValidationError({"participants": ["All participants must belong to the same team."]})
-
-        # Optionally forbid participants==1 for group chats
-        # (we’ll allow draft 1→add later; you can tighten if needed)
+            participants.append(req.user)
+    
+        from teams.models import TeamMembership
+        def ids(u):
+            return set(TeamMembership.objects.filter(user=u, active=True).values_list('team_id', flat=True))
+    
+        common = None
+        for u in participants:
+            tid = ids(u)
+            if common is None:
+                common = tid
+            else:
+                common &= tid
+    
+        if not common:
+            raise serializers.ValidationError({"participants": ["All participants must share an active team."]})
+    
         return attrs
+    
 
     def create(self, validated_data):
         participants = validated_data.pop('participants')
